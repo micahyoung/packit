@@ -25,16 +25,21 @@ func testService(t *testing.T, context spec.G, it spec.S) {
 	var (
 		Expect = NewWithT(t).Expect
 
-		path      string
-		transport *fakes.Transport
-		service   postal.Service
+		tomlPath     string
+		bindingsPath string
+		transport    *fakes.Transport
+		service      postal.Service
 	)
 
 	it.Before(func() {
+		var err error
+		bindingsPath, err = ioutil.TempDir("", "bindings")
+		Expect(err).NotTo(HaveOccurred())
+
 		file, err := ioutil.TempFile("", "buildpack.toml")
 		Expect(err).NotTo(HaveOccurred())
 
-		path = file.Name()
+		tomlPath = file.Name()
 
 		_, err = file.WriteString(`
 [[metadata.dependencies]]
@@ -94,7 +99,7 @@ version = "4.5.6"
 			deprecationDate, err := time.Parse(time.RFC3339, "2022-04-01T00:00:00Z")
 			Expect(err).NotTo(HaveOccurred())
 
-			dependency, err := service.Resolve(path, "some-entry", "1.2.*", "some-stack")
+			dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "1.2.*", "some-stack")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dependency).To(Equal(postal.Dependency{
 				DeprecationDate: deprecationDate,
@@ -106,10 +111,49 @@ version = "4.5.6"
 			}))
 		})
 
+		context("when dependency-mapping service binding is available", func() {
+			it.Before(func() {
+				var err error
+				err = os.MkdirAll(filepath.Join(bindingsPath, "dep-binding"), 0755)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = ioutil.WriteFile(filepath.Join(bindingsPath, "dep-binding", "type"), []byte("dependency-mapping"), 0644)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = ioutil.WriteFile(filepath.Join(bindingsPath, "dep-binding", "some-sha"), []byte("some-binding-uri"), 0644)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = ioutil.WriteFile(filepath.Join(bindingsPath, "dep-binding", "some-other-sha"), []byte("some-other-binding-uri"), 0644)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = os.MkdirAll(filepath.Join(bindingsPath, "other-binding"), 0755)
+				Expect(err).NotTo(HaveOccurred())
+
+				err = ioutil.WriteFile(filepath.Join(bindingsPath, "other-binding", "type"), []byte("other-type"), 0644)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			it("sets dependency URI from service binding", func() {
+				deprecationDate, err := time.Parse(time.RFC3339, "2022-04-01T00:00:00Z")
+				Expect(err).NotTo(HaveOccurred())
+
+				dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "1.2.*", "some-stack")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(dependency).To(Equal(postal.Dependency{
+					DeprecationDate: deprecationDate,
+					ID:              "some-entry",
+					Stacks:          []string{"some-stack"},
+					URI:             "some-binding-uri",
+					SHA256:          "some-sha",
+					Version:         "1.2.3",
+				}))
+			})
+		})
+
 		context("when there is NOT a default version", func() {
 			context("when the entry version is empty", func() {
 				it("picks the dependency with the highest semantic version number", func() {
-					dependency, err := service.Resolve(path, "some-entry", "", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						ID:      "some-entry",
@@ -123,7 +167,7 @@ version = "4.5.6"
 
 			context("when the entry version is default", func() {
 				it("picks the dependency with the highest semantic version number", func() {
-					dependency, err := service.Resolve(path, "some-entry", "default", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "default", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						ID:      "some-entry",
@@ -140,7 +184,7 @@ version = "4.5.6"
 					deprecationDate, err := time.Parse(time.RFC3339, "2022-04-01T00:00:00Z")
 					Expect(err).NotTo(HaveOccurred())
 
-					dependency, err := service.Resolve(path, "some-entry", "~> 1.2.0", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "~> 1.2.0", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						DeprecationDate: deprecationDate,
@@ -158,7 +202,7 @@ version = "4.5.6"
 					deprecationDate, err := time.Parse(time.RFC3339, "2022-04-01T00:00:00Z")
 					Expect(err).NotTo(HaveOccurred())
 
-					dependency, err := service.Resolve(path, "some-entry", "~> 1.1", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "~> 1.1", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						DeprecationDate: deprecationDate,
@@ -176,7 +220,7 @@ version = "4.5.6"
 					deprecationDate, err := time.Parse(time.RFC3339, "2022-04-01T00:00:00Z")
 					Expect(err).NotTo(HaveOccurred())
 
-					dependency, err := service.Resolve(path, "some-entry", "~> 1", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "~> 1", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						DeprecationDate: deprecationDate,
@@ -192,7 +236,7 @@ version = "4.5.6"
 
 		context("when there is a default version", func() {
 			it.Before(func() {
-				err := ioutil.WriteFile(path, []byte(`
+				err := ioutil.WriteFile(tomlPath, []byte(`
 [metadata]
 [metadata.default-versions]
 some-entry = "1.2.x"
@@ -230,7 +274,7 @@ version = "4.5.6"
 
 			context("when the entry version is empty", func() {
 				it("picks the dependency that best matches the default version", func() {
-					dependency, err := service.Resolve(path, "some-entry", "", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						ID:      "some-entry",
@@ -244,7 +288,7 @@ version = "4.5.6"
 
 			context("when the entry version is default", func() {
 				it("picks the dependency that best matches the default version", func() {
-					dependency, err := service.Resolve(path, "some-entry", "default", "some-stack")
+					dependency, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "default", "some-stack")
 					Expect(err).NotTo(HaveOccurred())
 					Expect(dependency).To(Equal(postal.Dependency{
 						ID:      "some-entry",
@@ -260,26 +304,26 @@ version = "4.5.6"
 		context("failure cases", func() {
 			context("when the buildpack.toml is malformed", func() {
 				it.Before(func() {
-					err := ioutil.WriteFile(path, []byte("this is not toml"), 0644)
+					err := ioutil.WriteFile(tomlPath, []byte("this is not toml"), 0644)
 					Expect(err).NotTo(HaveOccurred())
 				})
 
 				it("returns an error", func() {
-					_, err := service.Resolve(path, "some-entry", "1.2.3", "some-stack")
+					_, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "1.2.3", "some-stack")
 					Expect(err).To(MatchError(ContainSubstring("failed to parse buildpack.toml")))
 				})
 			})
 
 			context("when the entry version constraint is not valid", func() {
 				it("returns an error", func() {
-					_, err := service.Resolve(path, "some-entry", "this-is-not-semver", "some-stack")
+					_, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "this-is-not-semver", "some-stack")
 					Expect(err).To(MatchError(ContainSubstring("improper constraint")))
 				})
 			})
 
 			context("when the dependency version is not valid", func() {
 				it.Before(func() {
-					err := ioutil.WriteFile(path, []byte(`
+					err := ioutil.WriteFile(tomlPath, []byte(`
 [[metadata.dependencies]]
 id = "some-entry"
 sha256 = "some-sha"
@@ -291,14 +335,14 @@ version = "this is super not semver"
 				})
 
 				it("returns an error", func() {
-					_, err := service.Resolve(path, "some-entry", "1.2.3", "some-stack")
+					_, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "1.2.3", "some-stack")
 					Expect(err).To(MatchError(ContainSubstring("Invalid Semantic Version")))
 				})
 			})
 
 			context("when the entry version constraint cannot be satisfied", func() {
 				it("returns an error with all the supported versions listed", func() {
-					_, err := service.Resolve(path, "some-entry", "9.9.9", "some-stack")
+					_, err := service.Resolve(tomlPath, bindingsPath, "some-entry", "9.9.9", "some-stack")
 					Expect(err).To(MatchError(ContainSubstring("failed to satisfy \"some-entry\" dependency version constraint \"9.9.9\": no compatible versions. Supported versions are: [1.2.3, 4.5.6]")))
 				})
 			})

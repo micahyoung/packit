@@ -40,8 +40,8 @@ func NewService(transport Transport) Service {
 // "default", the default version for the dependency with the given id will be
 // used. If there is no default version for that dependency, a wildcard
 // constraint will be used.
-func (s Service) Resolve(path, id, version, stack string) (Dependency, error) {
-	dependencies, defaultVersion, err := parseBuildpack(path, id)
+func (s Service) Resolve(tomlPath, bindingsPath, id, version, stack string) (Dependency, error) {
+	dependencies, defaultVersion, err := parseBuildpack(tomlPath, id)
 	if err != nil {
 		return Dependency{}, err
 	}
